@@ -1,5 +1,7 @@
 import os
 
+import uuid
+
 import re
 
 from collections import defaultdict
@@ -20,21 +22,18 @@ import subprocess
 GREEN = "\033[32m"
 NOTGREEN = "\033[0m"
 
-def writePBSScript(name, resources, array_size, bash_script_path):
+def writePBSScript(script_basename, job_label, resources, array_size, bash_script_path):
     home = os.path.expanduser("~")
-    location = f"{home}/jobs/{name}_job.sh"
+    location = f"{home}/jobs/{script_basename}_job.sh"
 
     script = "#!/bin/bash\n"
 
     if array_size > 1:
-
-        script += f"#PBS -o {home}/logs/{name}.^array_index^_out.log\n"
-        script += f"#PBS -e {home}/logs/{name}.^array_index^_err.log\n"
-
+        script += f"#PBS -o {home}/logs/{job_label}.^array_index^_out.log\n"
+        script += f"#PBS -e {home}/logs/{job_label}.^array_index^_err.log\n"
     else:
-
-        script += f"#PBS -o {home}/logs/{name}_out.log\n"
-        script += f"#PBS -e {home}/logs/{name}_err.log\n"
+        script += f"#PBS -o {home}/logs/{job_label}_out.log\n"
+        script += f"#PBS -e {home}/logs/{job_label}_err.log\n"
 
     script += f"#PBS -l walltime={resources.walltime}\n"
 
@@ -47,17 +46,18 @@ def writePBSScript(name, resources, array_size, bash_script_path):
         select = f"#PBS -lselect=1:ncpus={resources.ncpus}:ompthreads={resources.ncpus}:mem={resources.mem}gb\n"
 
     script += select
-    script += f"#PBS -N {name}\n"
+    script += f"#PBS -N {job_label}\n"
     script += "#PBS -V\n"
     if array_size > 1:
-        script += f"#PBS -J 0-{array_size-1}\n"  # Array job range
+        script += f"#PBS -J 0-{array_size-1}\n"
     script += "cd $PBS_O_WORKDIR;\n"
-    script += f"{bash_script_path}\n"  # Run the bash script
+    script += f"{bash_script_path}\n"
 
     with open(location, "w") as f:
         f.write(script)
 
     return location
+
 
 
 def writeBashScript(location, name, env, commands):
@@ -168,9 +168,8 @@ class Executor(RemoteExecutor):
 
 
     def submit_array_job(self, jobs, rule_name, home):
-        # Create a mapping of array index to job command
         job_commands = []
-        array_indices = list(range(len(jobs)))  # Indices will be from 0 to len(jobs)-1
+        array_indices = list(range(len(jobs)))
 
         env = subprocess.check_output("export -p", shell=True).decode("utf-8")
 
@@ -178,15 +177,16 @@ class Executor(RemoteExecutor):
             job_cmd = self.format_job_exec(job)
             job_commands.append(job_cmd)
 
-        # Create a single bash script that can execute any command based on PBS_ARRAYID
-        bashLoc = writeBashScript(home + "/jobs", rule_name, env, job_commands)
+        uniq = uuid.uuid4().hex[:8]
+        script_base = f"{rule_name}.{uniq}"
 
-        # Create a single PBS script for the array job
-        scriptLoc = writePBSScript(rule_name, jobs[0].resources, len(jobs), bashLoc)
+        bashLoc = writeBashScript(home + "/jobs", script_base, env, job_commands)
+
+        scriptLoc = writePBSScript(script_base, rule_name, jobs[0].resources, len(jobs), bashLoc)
 
         cmd = f"qsub {scriptLoc}"
 
-        print(f"{GREEN}Submitting array job: {cmd}{NOTGREEN}")  # Log the array job submission command with green color
+        print(f"{GREEN}Submitting array job: {cmd}{NOTGREEN}")
 
         try:
             result = subprocess.run(
@@ -194,14 +194,14 @@ class Executor(RemoteExecutor):
             )
             job_id = result.stdout.strip()
 
-            # Log details for each sub-job in the array with green color
             for index, job in enumerate(jobs):
                 print(f"{GREEN}Submitting sub-job {index} of array job {job_id} with rule {job.rule.name}{NOTGREEN}")
                 job_info = SubmittedJobInfo(job=job, external_jobid=f"{job_id}[{index}]")
-                job_info.is_array_job = True  # Mark as array job
+                job_info.is_array_job = True
                 self.report_job_submission(job_info)
         except subprocess.CalledProcessError as e:
             raise WorkflowError(f"Failed to submit array job: {e.stderr}")
+
 
     def report_job_submission(self, job_info):
         job = job_info.job
@@ -217,7 +217,7 @@ class Executor(RemoteExecutor):
 
         # Use a list with one command for single jobs
         bashLoc = writeBashScript(home + "/jobs", name, env, [job_cmd])
-        scriptLoc = writePBSScript(name, job.resources, 1, bashLoc)
+        scriptLoc = writePBSScript(name, name, job.resources, 1, bashLoc)
 
         cmd = f"qsub {scriptLoc}"
 

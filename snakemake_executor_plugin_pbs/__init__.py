@@ -130,22 +130,18 @@ class Executor(RemoteExecutor):
 
     def run_job(self, job: JobExecutorInterface):
         # Group jobs by rule name for array job submission
-
         self.job_groups[job.rule.name].append(job)
         self.submit_jobs()
 
     def run_jobs(self, jobs: List[JobExecutorInterface]):
-
-        if len(jobs) <= 1:
+        rule_name = jobs[0].rule.name
+        if len(jobs) > 1 and rule_name not in self.array_jobs:
+            self.array_jobs.add(rule_name)
+            self.job_groups[rule_name].extend(jobs)
+        elif len(jobs) == 1:
             self.run_job(jobs[0])
+        self.submit_jobs()
 
-        else:
-
-            for job in jobs:
-                self.array_jobs.add(job.rule.name)
-                self.job_groups[job.rule.name].append(job)
-
-            self.submit_jobs()
 
     def submit_jobs(self):
         home = os.path.expanduser("~")
